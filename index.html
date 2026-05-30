@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SUCCU KISS - サキュバスキッス</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body {
+    height:100%;
+    background:#1a1a2e;
+    color:#fff;
+    font-family:"Courier New",monospace;
+    display:flex; flex-direction:column;
+    align-items:center; justify-content:center;
+    user-select:none;
+    -webkit-tap-highlight-color:transparent;
+  }
+  h1 {
+    font-size:22px; letter-spacing:3px; margin-bottom:6px;
+    color:#ffd700; text-shadow:2px 2px #d40000;
+    image-rendering:pixelated;
+  }
+  #hud {
+    display:flex; gap:18px; font-size:14px; margin-bottom:8px;
+    color:#9fe;
+  }
+  #hud span b { color:#ffd700; }
+  #wrap { position:relative; }
+  canvas {
+    background:#0d0d1a;
+    image-rendering:pixelated;
+    image-rendering:crisp-edges;
+    border:4px solid #444;
+    border-radius:4px;
+    box-shadow:0 0 0 4px #222, 0 8px 24px rgba(0,0,0,.6);
+    touch-action:none;
+  }
+  #overlay {
+    position:absolute; inset:0;
+    display:flex; flex-direction:column;
+    align-items:center; justify-content:center;
+    background:rgba(10,10,26,.88);
+    text-align:center; gap:14px;
+    border-radius:4px;
+  }
+  #overlay.hidden { display:none; }
+  #overlay h2 { font-size:28px; color:#ffd700; text-shadow:2px 2px #d40000; letter-spacing:2px; }
+  #overlay p { font-size:13px; color:#cdd; line-height:1.7; }
+  .btn {
+    background:#ffd700; color:#1a1a2e; border:none;
+    font-family:inherit; font-weight:bold; font-size:16px;
+    padding:10px 26px; border-radius:4px; cursor:pointer;
+    box-shadow:0 4px 0 #b89400; letter-spacing:1px;
+  }
+  .btn:active { transform:translateY(3px); box-shadow:0 1px 0 #b89400; }
+  #pad {
+    margin-top:14px;
+    display:grid;
+    grid-template-columns:repeat(3,56px);
+    grid-template-rows:repeat(3,56px);
+    gap:6px;
+  }
+  .pbtn {
+    background:#2a2a44; border:2px solid #555; border-radius:8px;
+    color:#9fe; font-size:22px; font-weight:bold;
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer;
+  }
+  .pbtn:active { background:#3d3d66; }
+  #bombBtn { background:#d40000; color:#fff; border-color:#ff5555; grid-column:2; grid-row:2; font-size:14px; }
+  .hide { display:none !important; }
+  .note { font-size:11px; color:#778; margin-top:10px; }
+</style>
+</head>
+<body>
+  <h1>💋 SUCCU KISS 💋</h1>
+  <div id="hud">
+    <span>HP <b id="life">3</b></span>
+    <span>魅力 <b id="fire">1</b></span>
+    <span>キス <b id="maxb">1</b></span>
+    <span>ダーリン <b id="enemies">0</b></span>
+  </div>
+  <div id="wrap">
+    <canvas id="cv" width="416" height="416"></canvas>
+    <div id="overlay">
+      <h2 id="ovTitle">SUCCU KISS</h2>
+      <p id="ovText">
+        矢印キー / WASD で移動<br>
+        スペース でキスマーク設置💋<br>
+        ダーリン全員にサキュバスキッスでクリア！<br><br>
+        🧱ブロックを壊すとアイテム出現<br>
+        💄魅力UP　💋キス数UP　👠スピードUP
+      </p>
+      <button class="btn" id="startBtn">START</button>
+    </div>
+  </div>
+
+  <div id="pad" class="hide">
+    <div class="pbtn" style="grid-column:2;grid-row:1" data-dir="up">▲</div>
+    <div class="pbtn" style="grid-column:1;grid-row:2" data-dir="left">◀</div>
+    <div class="pbtn" id="bombBtn">KISS</div>
+    <div class="pbtn" style="grid-column:3;grid-row:2" data-dir="right">▶</div>
+    <div class="pbtn" style="grid-column:2;grid-row:3" data-dir="down">▼</div>
+  </div>
+  <div class="note">PC: 矢印/WASD + スペース　／　スマホ: 下のパッド</div>
+
+<script>
+const TILE = 32, COLS = 13, ROWS = 13;
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+// tile: 0 empty, 1 wall(固定), 2 brick(破壊可)
+let grid = [];
+let player, enemies, bombs, blasts, items;
+let keys = {};
+let running = false, lastTime = 0, blastTimer = 0;
+let life = 3;
+
+const $ = id => document.getElementById(id);
+
+function newGrid(){
+  grid = [];
+  for(let y=0;y<ROWS;y++){
+    grid[y]=[];
+    for(let x=0;x<COLS;x++){
+      if(x===0||y===0||x===COLS-1||y===ROWS-1) grid[y][x]=1;       // 外壁
+      else if(x%2===0 && y%2===0) grid[y][x]=1;                     // 格子状の固定壁
+      else grid[y][x]=0;
+    }
+  }
+  // ブロックをランダム配置（スタート地点周辺は空ける）
+  for(let y=1;y<ROWS-1;y++){
+    for(let x=1;x<COLS-1;x++){
+      if(grid[y][x]!==0) continue;
+      if(near(x,y,1,1) || near(x,y,COLS-2,ROWS-2)) continue;
+      if(Math.random()<0.45) grid[y][x]=2;
+    }
+  }
+}
+function near(x,y,cx,cy){ return Math.abs(x-cx)+Math.abs(y-cy)<=1; }
+
+function reset(){
+  newGrid();
+  player = { x:1, y:1, px:1*TILE, py:1*TILE, dir:'down',
+             fire:1, maxBombs:1, speed:2.2, moving:false, inv:0 };
+  bombs=[]; blasts=[]; items=[];
+  enemies=[];
+  const spots=[[COLS-2,ROWS-2],[COLS-2,1],[1,ROWS-2],[COLS-2,Math.floor(ROWS/2)]];
+  spots.forEach((s,i)=>{
+    enemies.push({ x:s[0], y:s[1], px:s[0]*TILE, py:s[1]*TILE,
+                   dir:'left', moving:false, speed:1.3+i*0.15, think:0, alive:true });
+  });
+  updateHUD();
+}
+
+function updateHUD(){
+  $('life').textContent=life;
+  $('fire').textContent=player.fire;
+  $('maxb').textContent=player.maxBombs;
+  $('enemies').textContent=enemies.filter(e=>e.alive).length;
+}
+
+// ---------- 入力 ----------
+window.addEventListener('keydown',e=>{
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+  keys[e.key.toLowerCase()]=true;
+  if(e.key===' ') placeBomb();
+});
+window.addEventListener('keyup',e=>{ keys[e.key.toLowerCase()]=false; });
+
+// タッチパッド
+let touchDir=null;
+document.querySelectorAll('.pbtn[data-dir]').forEach(b=>{
+  const d=b.dataset.dir;
+  const on=e=>{e.preventDefault();touchDir=d;};
+  const off=e=>{e.preventDefault();touchDir=null;};
+  b.addEventListener('touchstart',on); b.addEventListener('touchend',off);
+  b.addEventListener('mousedown',on); b.addEventListener('mouseup',off);
+  b.addEventListener('mouseleave',off);
+});
+$('bombBtn').addEventListener('touchstart',e=>{e.preventDefault();placeBomb();});
+$('bombBtn').addEventListener('mousedown',e=>{e.preventDefault();placeBomb();});
+
+function wantDir(){
+  if(keys['arrowup']||keys['w']||touchDir==='up') return 'up';
+  if(keys['arrowdown']||keys['s']||touchDir==='down') return 'down';
+  if(keys['arrowleft']||keys['a']||touchDir==='left') return 'left';
+  if(keys['arrowright']||keys['d']||touchDir==='right') return 'right';
+  return null;
+}
+
+// ---------- 移動ヘルパ ----------
+const DV={up:[0,-1],down:[0,1],left:[-1,0],right:[1,0]};
+function passable(x,y){
+  if(x<0||y<0||x>=COLS||y>=ROWS) return false;
+  if(grid[y][x]!==0) return false;
+  if(bombs.some(b=>b.x===x&&b.y===y)) return false;
+  return true;
+}
+function moveEntity(ent, dir){
+  // グリッドにスナップしているときだけ方向転換
+  if(ent.px%TILE===0 && ent.py%TILE===0){
+    const [dx,dy]=DV[dir];
+    const nx=ent.x+dx, ny=ent.y+dy;
+    if(passable(nx,ny)){ ent.dir=dir; ent.tx=nx; ent.ty=ny; ent.moving=true; }
+    else { ent.moving=false; return false; }
+  }
+  if(ent.moving){
+    const tpx=ent.tx*TILE, tpy=ent.ty*TILE;
+    const sp=ent.speed;
+    if(ent.px<tpx) ent.px=Math.min(ent.px+sp,tpx);
+    else if(ent.px>tpx) ent.px=Math.max(ent.px-sp,tpx);
+    if(ent.py<tpy) ent.py=Math.min(ent.py+sp,tpy);
+    else if(ent.py>tpy) ent.py=Math.max(ent.py-sp,tpy);
+    if(ent.px===tpx && ent.py===tpy){ ent.x=ent.tx; ent.y=ent.ty; ent.moving=false; }
+  }
+  return true;
+}
+
+// ---------- 爆弾 ----------
+function placeBomb(){
+  if(!running) return;
+  const x=player.x, y=player.y;
+  if(bombs.length>=player.maxBombs) return;
+  if(bombs.some(b=>b.x===x&&b.y===y)) return;
+  bombs.push({ x,y, timer:120, fire:player.fire });
+}
+
+function explode(b){
+  const cells=[{x:b.x,y:b.y}];
+  for(const d of Object.values(DV)){
+    for(let i=1;i<=b.fire;i++){
+      const nx=b.x+d[0]*i, ny=b.y+d[1]*i;
+      if(grid[ny] && grid[ny][nx]===1) break;
+      cells.push({x:nx,y:ny});
+      if(grid[ny] && grid[ny][nx]===2){
+        grid[ny][nx]=0;
+        if(Math.random()<0.4) spawnItem(nx,ny);
+        break;
+      }
+    }
+  }
+  cells.forEach(c=>blasts.push({x:c.x,y:c.y,t:24}));
+  blastTimer=8;
+  // 連鎖
+  bombs.forEach(ob=>{ if(ob!==b && cells.some(c=>c.x===ob.x&&c.y===ob.y)) ob.timer=1; });
+}
+
+function spawnItem(x,y){
+  const types=['fire','bomb','speed'];
+  items.push({x,y,type:types[Math.floor(Math.random()*types.length)]});
+}
+
+// ---------- ループ ----------
+function update(){
+  // プレイヤー
+  const wd=wantDir();
+  if(wd) moveEntity(player,wd);
+  else if(player.moving) moveEntity(player,player.dir);
+  if(player.inv>0) player.inv--;
+
+  // アイテム取得
+  items=items.filter(it=>{
+    if(it.x===player.x&&it.y===player.y){
+      if(it.type==='fire') player.fire++;
+      else if(it.type==='bomb') player.maxBombs++;
+      else if(it.type==='speed') player.speed=Math.min(player.speed+0.5,4);
+      updateHUD();
+      return false;
+    }
+    return true;
+  });
+
+  // 爆弾
+  bombs.forEach(b=>b.timer--);
+  const boom=bombs.filter(b=>b.timer<=0);
+  boom.forEach(explode);
+  bombs=bombs.filter(b=>b.timer>0);
+
+  // 爆風
+  blasts.forEach(bl=>bl.t--);
+  blasts=blasts.filter(bl=>bl.t>0);
+
+  // プレイヤー被弾
+  if(player.inv<=0 && blasts.some(bl=>bl.x===player.x&&bl.y===player.y)){
+    hitPlayer();
+  }
+
+  // 敵
+  enemies.forEach(e=>{
+    if(!e.alive) return;
+    if(blasts.some(bl=>bl.x===e.x&&bl.y===e.y)){ e.alive=false; updateHUD(); return; }
+    e.think--;
+    if(!e.moving){
+      if(e.think<=0 || !canGo(e,e.dir)){
+        // 進める方向からランダム（たまにプレイヤー方向）
+        const opts=Object.keys(DV).filter(d=>canGo(e,d));
+        if(opts.length){
+          let pick=opts[Math.floor(Math.random()*opts.length)];
+          if(Math.random()<0.4){
+            const toward=chase(e);
+            if(toward && opts.includes(toward)) pick=toward;
+          }
+          e.dir=pick;
+        }
+        e.think=20+Math.floor(Math.random()*40);
+      }
+    }
+    moveEntity(e,e.dir);
+    if(player.inv<=0 && e.x===player.x && e.y===player.y) hitPlayer();
+  });
+
+  // 勝敗
+  if(enemies.every(e=>!e.alive)) win();
+}
+
+function canGo(e,dir){
+  const [dx,dy]=DV[dir];
+  return passable(e.x+dx,e.y+dy);
+}
+function chase(e){
+  const dx=player.x-e.x, dy=player.y-e.y;
+  if(Math.abs(dx)>Math.abs(dy)) return dx>0?'right':'left';
+  return dy>0?'down':'up';
+}
+
+function hitPlayer(){
+  life--; updateHUD();
+  player.inv=90;
+  player.x=1; player.y=1; player.px=TILE; player.py=TILE; player.moving=false;
+  if(life<=0) gameOver();
+}
+
+// ---------- 描画 ----------
+function draw(){
+  ctx.fillStyle='#0d0d1a';
+  ctx.fillRect(0,0,cv.width,cv.height);
+  // 床市松
+  for(let y=0;y<ROWS;y++)for(let x=0;x<COLS;x++){
+    if(grid[y][x]===0){
+      ctx.fillStyle=((x+y)%2===0)?'#1c2233':'#222a3d';
+      ctx.fillRect(x*TILE,y*TILE,TILE,TILE);
+    }
+  }
+  // 壁・ブロック
+  for(let y=0;y<ROWS;y++)for(let x=0;x<COLS;x++){
+    if(grid[y][x]===1) drawWall(x,y);
+    else if(grid[y][x]===2) drawBrick(x,y);
+  }
+  // アイテム
+  items.forEach(drawItem);
+  // 爆弾
+  bombs.forEach(drawBomb);
+  // 爆風
+  blasts.forEach(drawBlast);
+  // 敵
+  enemies.forEach(e=>{ if(e.alive) drawEnemy(e); });
+  // プレイヤー
+  drawPlayer();
+}
+
+function px(t){return Math.round(t);}
+function drawWall(x,y){
+  ctx.fillStyle='#555'; ctx.fillRect(x*TILE,y*TILE,TILE,TILE);
+  ctx.fillStyle='#777'; ctx.fillRect(x*TILE+2,y*TILE+2,TILE-4,TILE-6);
+  ctx.fillStyle='#444'; ctx.fillRect(x*TILE+2,y*TILE+TILE-6,TILE-4,4);
+}
+function drawBrick(x,y){
+  const bx=x*TILE,by=y*TILE;
+  ctx.fillStyle='#9c4a2a'; ctx.fillRect(bx,by,TILE,TILE);
+  ctx.fillStyle='#c2623a'; ctx.fillRect(bx+2,by+2,TILE-4,TILE-4);
+  ctx.fillStyle='#7a371d';
+  ctx.fillRect(bx+2,by+TILE/2-1,TILE-4,2);
+  ctx.fillRect(bx+TILE/2-1,by+2,2,TILE/2-3);
+  ctx.fillRect(bx+TILE/2-1+6,by+TILE/2+1,2,TILE/2-3);
+}
+function drawItem(it){
+  const bx=it.x*TILE,by=it.y*TILE;
+  ctx.fillStyle='#000a'; ctx.fillRect(bx+4,by+4,TILE-8,TILE-8);
+  let c='#fff';
+  if(it.type==='fire') c='#ff2f7f';
+  if(it.type==='bomb') c='#ff7fb0';
+  if(it.type==='speed') c='#c77dff';
+  ctx.fillStyle=c; ctx.fillRect(bx+8,by+8,TILE-16,TILE-16);
+  ctx.fillStyle='#fff';
+  const sym=it.type==='fire'?'M':it.type==='bomb'?'K':'S';
+  ctx.font='bold 12px Courier New'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(sym,bx+TILE/2,by+TILE/2+1);
+}
+function drawBomb(b){
+  const cx=b.x*TILE+TILE/2, cy=b.y*TILE+TILE/2;
+  const big=(b.timer%30<15);
+  const s=big?1.0:0.86;
+  // キスマーク（唇）ピンクに鼓動
+  ctx.save();
+  ctx.translate(cx,cy); ctx.scale(s,s);
+  ctx.fillStyle=(b.timer<40)?'#ff1f6b':'#ff4f8b';
+  // 上唇 左右
+  ctx.beginPath();
+  ctx.moveTo(0,-2);
+  ctx.bezierCurveTo(-3,-8,-11,-7,-10,-1);
+  ctx.bezierCurveTo(-9,2,-3,2,0,0);
+  ctx.bezierCurveTo(3,2,9,2,10,-1);
+  ctx.bezierCurveTo(11,-7,3,-8,0,-2);
+  ctx.fill();
+  // 下唇
+  ctx.beginPath();
+  ctx.moveTo(-10,-1);
+  ctx.bezierCurveTo(-9,7,9,7,10,-1);
+  ctx.bezierCurveTo(6,3,-6,3,-10,-1);
+  ctx.fill();
+  // ハイライト
+  ctx.fillStyle='rgba(255,255,255,.6)';
+  ctx.fillRect(-5,-4,3,2);
+  ctx.restore();
+}
+function drawBlast(bl){
+  const bx=bl.x*TILE,by=bl.y*TILE;
+  const a=bl.t/24;
+  // ピンクの爆風
+  ctx.fillStyle=`rgba(255,${60+Math.floor(120*a)},${140+Math.floor(60*a)},${0.45+0.4*a})`;
+  ctx.fillRect(bx+2,by+2,TILE-4,TILE-4);
+  ctx.fillStyle=`rgba(255,230,245,${a})`;
+  ctx.fillRect(bx+8,by+8,TILE-16,TILE-16);
+  // 中心にキスマーク
+  if(bl.t>10){
+    const cx=bx+TILE/2,cy=by+TILE/2;
+    ctx.fillStyle=`rgba(255,30,110,${a})`;
+    ctx.beginPath();
+    ctx.moveTo(cx,cy-1);
+    ctx.bezierCurveTo(cx-2,cy-5,cx-7,cy-4,cx-6,cy);
+    ctx.bezierCurveTo(cx-5,cy+4,cx+5,cy+4,cx+6,cy);
+    ctx.bezierCurveTo(cx+7,cy-4,cx+2,cy-5,cx,cy-1);
+    ctx.fill();
+  }
+}
+function drawPlayer(){
+  if(player.inv>0 && Math.floor(player.inv/6)%2===0) return; // 点滅
+  const bx=px(player.px),by=px(player.py);
+  // 翼（背後）
+  ctx.fillStyle='#6a2da0';
+  ctx.fillRect(bx+1,by+9,5,7);
+  ctx.fillRect(bx+TILE-6,by+9,5,7);
+  ctx.fillStyle='#4a1d72';
+  ctx.fillRect(bx,by+12,4,5);
+  ctx.fillRect(bx+TILE-4,by+12,4,5);
+  // 体（紫ドレス）
+  ctx.fillStyle='#a23bd6'; ctx.fillRect(bx+8,by+13,TILE-16,TILE-17);
+  ctx.fillStyle='#7d28a8'; ctx.fillRect(bx+8,by+TILE-7,TILE-16,3);
+  // しっぽ
+  ctx.fillStyle='#a23bd6';
+  ctx.fillRect(bx+TILE-7,by+TILE-7,5,2);
+  ctx.fillStyle='#ff4f8b'; ctx.fillRect(bx+TILE-4,by+TILE-9,3,3); // 矢じり
+  // 髪
+  ctx.fillStyle='#3a1850'; ctx.fillRect(bx+7,by+4,TILE-14,8);
+  // 顔
+  ctx.fillStyle='#ffe0e8'; ctx.fillRect(bx+9,by+6,TILE-18,7);
+  // ツノ
+  ctx.fillStyle='#d4347a';
+  ctx.fillRect(bx+8,by+2,2,3); ctx.fillRect(bx+TILE-10,by+2,2,3);
+  // 目（ピンク）
+  ctx.fillStyle='#ff2f7f';
+  if(player.dir==='left'){ ctx.fillRect(bx+9,by+9,3,2); }
+  else if(player.dir==='right'){ ctx.fillRect(bx+TILE-12,by+9,3,2); }
+  else { ctx.fillRect(bx+10,by+9,2,2); ctx.fillRect(bx+TILE-12,by+9,2,2); }
+  // 唇
+  ctx.fillStyle='#ff1f6b'; ctx.fillRect(bx+13,by+11,TILE-26,2);
+}
+function drawEnemy(e){
+  const bx=px(e.px),by=px(e.py);
+  // 体（スーツ風・ダーリン）
+  ctx.fillStyle='#2b4a8c'; ctx.fillRect(bx+6,by+13,TILE-12,TILE-17);
+  ctx.fillStyle='#fff'; ctx.fillRect(bx+TILE/2-2,by+13,4,TILE-17); // シャツ
+  ctx.fillStyle='#e23a5a'; ctx.fillRect(bx+TILE/2-1,by+13,2,5);    // ネクタイ
+  // 髪
+  ctx.fillStyle='#1a1a22'; ctx.fillRect(bx+7,by+4,TILE-14,7);
+  // 顔
+  ctx.fillStyle='#ffd9b8'; ctx.fillRect(bx+8,by+7,TILE-16,7);
+  // 目
+  ctx.fillStyle='#222'; ctx.fillRect(bx+10,by+10,2,2); ctx.fillRect(bx+TILE-12,by+10,2,2);
+  // ハート（魅了されかけ）点滅
+  if(Math.floor(Date.now()/400)%2===0){
+    ctx.fillStyle='#ff4f8b';
+    ctx.fillRect(bx+TILE-6,by+3,2,2);
+    ctx.fillRect(bx+TILE-4,by+3,2,2);
+    ctx.fillRect(bx+TILE-5,by+5,2,2);
+  }
+  // 足
+  ctx.fillStyle='#1f3566';
+  ctx.fillRect(bx+7,by+TILE-6,5,4); ctx.fillRect(bx+TILE-12,by+TILE-6,5,4);
+}
+
+// ---------- 状態管理 ----------
+function loop(t){
+  if(!running) return;
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+function start(){
+  life=3; reset();
+  $('overlay').classList.add('hidden');
+  running=true; requestAnimationFrame(loop);
+}
+function showOverlay(title,text,btn){
+  $('ovTitle').textContent=title;
+  $('ovText').innerHTML=text;
+  $('startBtn').textContent=btn;
+  $('overlay').classList.remove('hidden');
+}
+function win(){
+  running=false;
+  showOverlay('💋 ALL KISS! 💋','ダーリン全員を堕とした！<br>残りHP: '+life+'<br><br>もう一度遊ぶ？','RETRY');
+}
+function gameOver(){
+  running=false;
+  showOverlay('GAME OVER','力尽きてしまった…<br><br>もう一度挑戦！','RETRY');
+}
+$('startBtn').addEventListener('click',start);
+
+// スマホ判定でパッド表示
+if('ontouchstart' in window){ document.getElementById('pad').classList.remove('hide'); }
+</script>
+</body>
+</html>
