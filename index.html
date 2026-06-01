@@ -71,11 +71,22 @@
   #bombBtn { background:#d40000; color:#fff; border-color:#ff5555; grid-column:2; grid-row:2; font-size:14px; }
   .hide { display:none !important; }
   .note { font-size:11px; color:#778; margin-top:10px; }
+  #diffWrap { display:flex; flex-direction:column; align-items:center; gap:6px; margin-top:4px; }
+  .diffLabel { font-size:11px; color:#cdd; letter-spacing:2px; }
+  #diffBtns { display:flex; gap:8px; }
+  .diff {
+    background:#2a2a44; color:#cdd; border:2px solid #555;
+    font-family:inherit; font-weight:bold; font-size:13px;
+    padding:6px 14px; border-radius:6px; cursor:pointer; letter-spacing:1px;
+  }
+  .diff.active { background:#ff2f7f; color:#fff; border-color:#ff7fb0; box-shadow:0 0 8px #ff2f7f88; }
+  .diff:active { transform:translateY(2px); }
 </style>
 </head>
 <body>
   <h1>💋 SUCCU KISS 💋</h1>
   <div id="hud">
+    <span>STAGE <b id="stage">1</b>/5</span>
     <span>HP <b id="life">3</b></span>
     <span>魅力 <b id="fire">1</b></span>
     <span>キス <b id="maxb">1</b></span>
@@ -88,10 +99,20 @@
       <p id="ovText">
         矢印キー / WASD で移動<br>
         スペース でキスマーク設置💋<br>
-        ダーリン全員にサキュバスキッスでクリア！<br><br>
-        🧱ブロックを壊すとアイテム出現<br>
-        💄魅力UP　💋キス数UP　👠スピードUP
+        ダーリン全員にサキュバスキッスでクリア！<br>
+        全5面・HP持ち越し<br><br>
+        🧱ブロックからアイテム＆使い魔のタマゴ🥚<br>
+        💄魅力UP　💋キス数UP　👠スピードUP<br>
+        🥚使い魔に乗ると被弾を1回ガード！
       </p>
+      <div id="diffWrap">
+        <span class="diffLabel">難易度</span>
+        <div id="diffBtns">
+          <button class="diff" data-d="easy">EASY</button>
+          <button class="diff active" data-d="normal">NORMAL</button>
+          <button class="diff" data-d="hard">HARD</button>
+        </div>
+      </div>
       <button class="btn" id="startBtn">START</button>
     </div>
   </div>
@@ -117,6 +138,19 @@ let player, enemies, bombs, blasts, items;
 let keys = {};
 let running = false, lastTime = 0, blastTimer = 0;
 let life = 3;
+let stage = 1, difficulty = 'normal';
+let familiar = null;   // フィールドに落ちている使い魔(タマゴ)
+let mounted = false;   // プレイヤーが使い魔に騎乗中か
+let mountColor = '#7fd4ff';
+const TOTAL_STAGES = 5;
+const FAM_COLORS = ['#7fd4ff','#ff9ed8','#9affc0','#ffd76a','#c9a3ff'];
+
+// 難易度設定: base敵数, 速度, 追尾率, 初期HP
+const DIFF = {
+  easy:   { baseEnemies:2, speed:1.05, chase:0.25, hp:4, eggRate:0.30 },
+  normal: { baseEnemies:3, speed:1.30, chase:0.40, hp:3, eggRate:0.22 },
+  hard:   { baseEnemies:4, speed:1.55, chase:0.55, hp:3, eggRate:0.16 }
+};
 
 const $ = id => document.getElementById(id);
 
@@ -141,21 +175,35 @@ function newGrid(){
 }
 function near(x,y,cx,cy){ return Math.abs(x-cx)+Math.abs(y-cy)<=1; }
 
-function reset(){
+function reset(keepPower){
   newGrid();
-  player = { x:1, y:1, px:1*TILE, py:1*TILE, dir:'down',
-             fire:1, maxBombs:1, speed:2.2, moving:false, inv:0 };
+  const cfg=DIFF[difficulty];
+  if(!keepPower){
+    player = { x:1, y:1, px:1*TILE, py:1*TILE, dir:'down',
+               fire:1, maxBombs:1, speed:2.2, moving:false, inv:0 };
+  } else {
+    // ステージ持ち越し: 強化はそのまま、位置だけリセット
+    player.x=1; player.y=1; player.px=TILE; player.py=TILE; player.moving=false; player.inv=60;
+  }
   bombs=[]; blasts=[]; items=[];
+  familiar=null; mounted=false;
   enemies=[];
-  const spots=[[COLS-2,ROWS-2],[COLS-2,1],[1,ROWS-2],[COLS-2,Math.floor(ROWS/2)]];
-  spots.forEach((s,i)=>{
-    enemies.push({ x:s[0], y:s[1], px:s[0]*TILE, py:s[1]*TILE,
-                   dir:'left', moving:false, speed:1.3+i*0.15, think:0, alive:true });
-  });
+  // ステージが進むほど敵が増える(最大6)
+  const count=Math.min(cfg.baseEnemies + Math.floor((stage-1)/2), 6);
+  const spots=[[COLS-2,ROWS-2],[COLS-2,1],[1,ROWS-2],[COLS-2,Math.floor(ROWS/2)],
+               [1,Math.floor(ROWS/2)],[Math.floor(COLS/2),ROWS-2]];
+  for(let i=0;i<count;i++){
+    const sp=spots[i%spots.length];
+    const spd=(cfg.speed + stage*0.06 + i*0.05);
+    enemies.push({ x:sp[0], y:sp[1], px:sp[0]*TILE, py:sp[1]*TILE,
+                   dir:'left', moving:false, speed:spd, chase:cfg.chase,
+                   think:0, alive:true });
+  }
   updateHUD();
 }
 
 function updateHUD(){
+  $('stage').textContent=stage;
   $('life').textContent=life;
   $('fire').textContent=player.fire;
   $('maxb').textContent=player.maxBombs;
@@ -249,6 +297,11 @@ function explode(b){
 }
 
 function spawnItem(x,y){
+  // 使い魔のタマゴ抽選(まだ場にいない・未騎乗のときだけ)
+  if(!familiar && !mounted && Math.random()<DIFF[difficulty].eggRate){
+    familiar={ x, y, px:x*TILE, py:y*TILE, color:FAM_COLORS[Math.floor(Math.random()*FAM_COLORS.length)] };
+    return;
+  }
   const types=['fire','bomb','speed'];
   items.push({x,y,type:types[Math.floor(Math.random()*types.length)]});
 }
@@ -257,9 +310,18 @@ function spawnItem(x,y){
 function update(){
   // プレイヤー
   const wd=wantDir();
+  // 騎乗中は速度ボーナス
+  const baseSpeed=player.speed;
+  if(mounted) player.speed=Math.min(baseSpeed+0.7,4.2);
   if(wd) moveEntity(player,wd);
   else if(player.moving) moveEntity(player,player.dir);
+  player.speed=baseSpeed;
   if(player.inv>0) player.inv--;
+
+  // 使い魔に乗る
+  if(familiar && !mounted && familiar.x===player.x && familiar.y===player.y){
+    mounted=true; mountColor=familiar.color; familiar=null;
+  }
 
   // アイテム取得
   items=items.filter(it=>{
@@ -299,7 +361,7 @@ function update(){
         const opts=Object.keys(DV).filter(d=>canGo(e,d));
         if(opts.length){
           let pick=opts[Math.floor(Math.random()*opts.length)];
-          if(Math.random()<0.4){
+          if(Math.random()<(e.chase||0.4)){
             const toward=chase(e);
             if(toward && opts.includes(toward)) pick=toward;
           }
@@ -311,6 +373,13 @@ function update(){
     moveEntity(e,e.dir);
     if(player.inv<=0 && e.x===player.x && e.y===player.y) hitPlayer();
   });
+
+  // 逃げる使い魔(身代わり後)を少しだけ動かして消す
+  if(familiar && familiar.flee>0){
+    familiar.flee--;
+    familiar.py-=2;
+    if(familiar.flee<=0) familiar=null;
+  }
 
   // 勝敗
   if(enemies.every(e=>!e.alive)) win();
@@ -327,6 +396,13 @@ function chase(e){
 }
 
 function hitPlayer(){
+  if(mounted){
+    // 使い魔が身代わり: 騎乗解除して逃がす(HPは減らない)
+    mounted=false;
+    familiar={ x:player.x, y:player.y, px:player.px, py:player.py, color:mountColor, flee:30 };
+    player.inv=70;
+    return;
+  }
   life--; updateHUD();
   player.inv=90;
   player.x=1; player.y=1; player.px=TILE; player.py=TILE; player.moving=false;
@@ -355,8 +431,12 @@ function draw(){
   bombs.forEach(drawBomb);
   // 爆風
   blasts.forEach(drawBlast);
+  // 使い魔(タマゴ/逃走)
+  if(familiar) drawFamiliar(familiar);
   // 敵
   enemies.forEach(e=>{ if(e.alive) drawEnemy(e); });
+  // 騎乗中の使い魔(プレイヤーの足元)
+  if(mounted) drawMount(player);
   // プレイヤー
   drawPlayer();
 }
@@ -492,6 +572,45 @@ function drawEnemy(e){
   ctx.fillRect(bx+7,by+TILE-6,5,4); ctx.fillRect(bx+TILE-12,by+TILE-6,5,4);
 }
 
+function drawFamiliar(fa){
+  const bx=px(fa.px),by=px(fa.py);
+  const fl=fa.flee>0;
+  // タマゴ or コウモリ使い魔
+  const c=fa.color;
+  // 体
+  ctx.fillStyle=c;
+  ctx.fillRect(bx+9,by+10,TILE-18,TILE-16);
+  // 翼(羽ばたき)
+  const flap=Math.floor(Date.now()/150)%2===0?2:5;
+  ctx.fillRect(bx+3,by+11+flap,6,5);
+  ctx.fillRect(bx+TILE-9,by+11+flap,6,5);
+  // 目
+  ctx.fillStyle='#222';
+  ctx.fillRect(bx+11,by+13,2,2); ctx.fillRect(bx+TILE-13,by+13,2,2);
+  // ツノ(小)
+  ctx.fillStyle=c;
+  ctx.fillRect(bx+10,by+8,2,2); ctx.fillRect(bx+TILE-12,by+8,2,2);
+  if(!fl){
+    // 「乗って！」ハート
+    if(Math.floor(Date.now()/350)%2===0){
+      ctx.fillStyle='#ff4f8b';
+      ctx.fillRect(bx+TILE/2-1,by+2,2,2);
+    }
+  }
+}
+function drawMount(p){
+  const bx=px(p.px),by=px(p.py);
+  const c=mountColor;
+  // 足元に使い魔(乗り物化)
+  ctx.fillStyle=c;
+  ctx.fillRect(bx+5,by+TILE-9,TILE-10,6);
+  const flap=Math.floor(Date.now()/120)%2===0?0:2;
+  ctx.fillRect(bx+1,by+TILE-8+flap,5,4);
+  ctx.fillRect(bx+TILE-6,by+TILE-8+flap,5,4);
+  ctx.fillStyle='#222';
+  ctx.fillRect(bx+8,by+TILE-7,2,2);
+}
+
 // ---------- 状態管理 ----------
 function loop(t){
   if(!running) return;
@@ -499,26 +618,60 @@ function loop(t){
   draw();
   requestAnimationFrame(loop);
 }
-function start(){
-  life=3; reset();
+let pendingNext=false; // 次ステージ待ち
+
+function newGame(){
+  stage=1;
+  life=DIFF[difficulty].hp;
+  reset(false);
   $('overlay').classList.add('hidden');
   running=true; requestAnimationFrame(loop);
 }
-function showOverlay(title,text,btn){
+function nextStage(){
+  stage++;
+  reset(true); // パワー持ち越し
+  $('overlay').classList.add('hidden');
+  running=true; requestAnimationFrame(loop);
+}
+function startBtnClick(){
+  if(pendingNext){ pendingNext=false; nextStage(); }
+  else newGame();
+}
+function showOverlay(title,text,btn,showDiff){
   $('ovTitle').textContent=title;
   $('ovText').innerHTML=text;
   $('startBtn').textContent=btn;
+  $('diffWrap').style.display = showDiff ? 'flex' : 'none';
   $('overlay').classList.remove('hidden');
 }
 function win(){
   running=false;
-  showOverlay('💋 ALL KISS! 💋','ダーリン全員を堕とした！<br>残りHP: '+life+'<br><br>もう一度遊ぶ？','RETRY');
+  if(stage>=TOTAL_STAGES){
+    pendingNext=false;
+    showOverlay('👑 ALL CLEAR! 👑',
+      '全'+TOTAL_STAGES+'面クリア！すべてのダーリンを堕とした💋<br>残りHP: '+life+'<br>難易度: '+difficulty.toUpperCase()+'<br><br>もう一度遊ぶ？',
+      'RETRY', true);
+  } else {
+    pendingNext=true;
+    showOverlay('💋 STAGE '+stage+' CLEAR 💋',
+      'ダーリンを全員堕とした！<br>残りHP: '+life+'<br>強化はそのまま次の面へ➡<br><br>次はSTAGE '+(stage+1),
+      'NEXT', false);
+  }
 }
 function gameOver(){
-  running=false;
-  showOverlay('GAME OVER','力尽きてしまった…<br><br>もう一度挑戦！','RETRY');
+  running=false; pendingNext=false;
+  showOverlay('GAME OVER','STAGE '+stage+' で力尽きた…<br><br>もう一度挑戦！','RETRY', true);
 }
-$('startBtn').addEventListener('click',start);
+$('startBtn').addEventListener('click',startBtnClick);
+
+// 難易度選択
+document.querySelectorAll('.diff').forEach(b=>{
+  b.addEventListener('click',()=>{
+    document.querySelectorAll('.diff').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    difficulty=b.dataset.d;
+  });
+});
 
 // スマホ判定でパッド表示
 if('ontouchstart' in window){ document.getElementById('pad').classList.remove('hide'); }
